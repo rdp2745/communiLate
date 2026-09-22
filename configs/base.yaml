@@ -1,0 +1,122 @@
+# Shared defaults. Every experiment config `extends: base.yaml` and overrides
+# only what differs, so a change here propagates to all three experiments.
+
+experiment:
+  name: base
+  notes: ""
+
+model:
+  # Start here, not at 1.3B/3.3B. The distilled 600M LoRA-trains on a single
+  # 16GB GPU and turns experiments around in minutes; scale up only once the
+  # pipeline produces results worth scaling.
+  base_model: facebook/nllb-200-distilled-600M
+
+  # FLORES-200 codes. NLLB rejects bare ISO codes ("en", "es"), and the wrong
+  # code fails at generation time rather than load time.
+  src_lang: eng_Latn
+  tgt_lang: spa_Latn
+
+  max_source_length: 128
+  max_target_length: 128
+  dtype: float32
+
+data:
+  # Which loader to use: `jsonl_dir` reads prepared JSONL from a folder,
+  # `opensubtitles` reads a raw OPUS Moses download.
+  loader: jsonl_dir
+
+  # THE swap point. Change this (or pass --data-path) to train on a different
+  # corpus; nothing else in the config or code needs to move.
+  path: data/processed/opensubtitles_en_es
+
+  files:
+    train: train.jsonl
+    dev: dev.jsonl
+    test: test.jsonl
+
+  # Used only when no per-split file exists: splits are then derived by hashing
+  # record ids, which keeps assignments stable as the corpus grows.
+  split_ratios: {train: 0.90, dev: 0.05, test: 0.05}
+
+  # as_is | swap | both. `both` trains eng->spa and spa->eng from one corpus.
+  direction: as_is
+
+  # Cap records for a quick smoke run; null means no limit.
+  max_records: null
+
+  filters:
+    normalise: true
+    dedupe: true
+    min_tokens: 4
+    max_tokens: 100
+    max_length_ratio: 2.5
+    drop_advertising: true
+    drop_punctuation_only: true
+    min_alignment_score: null
+    include_genres: []
+    exclude_genres: []
+
+lora:
+  enabled: true
+  r: 16
+  alpha: 32
+  dropout: 0.05
+  bias: none
+  # NLLB-200 is an M2M100 architecture. Add fc1/fc2 to bring the feed-forward
+  # blocks in, but only if attention-only underfits.
+  target_modules: [q_proj, k_proj, v_proj, out_proj]
+
+training:
+  output_dir: runs/${experiment.name}
+  learning_rate: 1.0e-4
+  batch_size: 8
+  eval_batch_size: 8
+  gradient_accumulation_steps: 4
+  epochs: 3
+  warmup_ratio: 0.03
+  weight_decay: 0.0
+  logging_steps: 50
+  eval_steps: 500
+  save_steps: 500
+  save_total_limit: 2
+  seed: 42
+  fp16: false
+  bf16: false
+  report_to: []
+
+generation:
+  num_beams: 4
+  max_new_tokens: 128
+  length_penalty: 1.0
+  no_repeat_ngram_size: 0
+
+inference:
+  adapter_path: null      # null = frozen baseline
+  merge_adapter: false
+  batch_size: 16
+  device: null            # null = cuda when available
+
+retrieval:
+  enabled: false
+  encoder: sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
+  index_path: runs/${experiment.name}/memory
+  encode_batch_size: 64
+  progress: true
+
+gating:
+  enabled: false
+  # Similarity above which a stored human translation is returned outright.
+  tm_threshold: 0.95
+  # Length-normalised mean token log-prob below which the adapter's output is
+  # rejected in favour of the frozen baseline. null disables that route.
+  # Calibrate on a dev set -- there is no universally right value.
+  confidence_threshold: null
+
+eval:
+  # chrF++ is the headline metric: BLEU is close to blind to register and
+  # dialect shifts, which is exactly what these experiments manipulate.
+  metrics: [chrf, bleu]
+  output_dir: runs/${experiment.name}/eval
+  n_examples: 25
+  marker_rate: false
+  expected_region: null

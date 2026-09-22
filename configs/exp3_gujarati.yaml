@@ -1,0 +1,65 @@
+# Experiment 3 -- Gujarati family corpus (the case study).
+#
+# Same pipeline, repointed at hand-collected data. This is the only genuinely
+# spontaneous, unscripted corpus in the project: no public dataset covers
+# informal, code-switched Gujarati family speech, which is what makes this the
+# contribution rather than a repeat of the Spanish phase.
+#
+# Retrieval matters most here. The corpus is small and full of fixed family
+# expressions a general model has never seen, so a near-exact translation-memory
+# match is more trustworthy than anything NLLB will generate -- and the
+# confidence gate falls back to the frozen baseline when the adapter, trained on
+# very little data, is out of its depth.
+#
+# Realistic target: 500-2000 hand-transcribed pairs. Transcription is the long
+# pole -- Whisper handles Gujarati passably but degrades badly on code-switching,
+# so budget for manual correction of every line. Start collecting in week 1.
+
+extends: base.yaml
+
+experiment:
+  name: exp3_gujarati
+  notes: "LoRA + translation memory on a hand-collected family corpus"
+
+model:
+  src_lang: eng_Latn
+  tgt_lang: guj_Gujr
+
+data:
+  loader: jsonl_dir
+  path: data/processed/gujarati_family
+  direction: both         # understand them, and reply to them
+  filters:
+    # Hand-curated data: filter almost nothing, and never dedupe -- repeated
+    # family phrases are signal here, not noise.
+    normalise: true
+    dedupe: false
+    min_tokens: 1
+    max_tokens: 100
+    max_length_ratio: 4.0
+
+lora:
+  # A few hundred pairs overfits fast. Lower rank, higher dropout, fewer epochs.
+  r: 8
+  alpha: 16
+  dropout: 0.1
+
+training:
+  epochs: 4
+  learning_rate: 5.0e-5
+  batch_size: 4
+  eval_steps: 50
+  save_steps: 50
+  logging_steps: 10
+
+retrieval:
+  enabled: true
+
+gating:
+  enabled: true
+  tm_threshold: 0.92
+  confidence_threshold: -1.2   # calibrate on dev; this is a starting point only
+
+eval:
+  metrics: [chrf, bleu]
+  n_examples: 50

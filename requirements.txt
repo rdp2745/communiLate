@@ -1,0 +1,21 @@
+# --- core (needed for config / schema / data layer) ---
+PyYAML>=6.0
+
+# --- ML stack (needed only for training + inference) ---
+torch>=2.1
+transformers>=4.44
+peft>=0.11
+accelerate>=0.30
+datasets>=2.19
+sentencepiece>=0.2
+
+# --- evaluation ---
+sacrebleu>=2.4
+unbabel-comet>=2.2
+
+# --- retrieval ---
+sentence-transformers>=3.0
+faiss-cpu>=1.8
+
+# --- dev ---
+pytest>=8.0

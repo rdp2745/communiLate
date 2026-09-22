@@ -1,0 +1,48 @@
+# Experiment 1 -- formal baseline vs. dialogue-register adapter.
+#
+# Frozen NLLB-200 against a LoRA trained on conversational-style parallel data,
+# evaluated primarily in English -> Spanish because target-side adaptation is
+# directly observable; the reverse direction is trained too but shows the effect
+# far less visibly.
+#
+# NOTE ON THE CORPUS: OpenSubtitles is film and TV subtitles -- dialogue
+# *written to be spoken*, not spontaneous speech. Disfluencies, self-repairs and
+# backchannels are largely absent, and subtitle reading-speed limits mean many
+# targets are condensed rather than faithful. Describe this experiment as
+# "written/formal register vs. dialogue register", not as spontaneous speech.
+# Swapping in a better corpus later is a --data-path change.
+
+extends: base.yaml
+
+experiment:
+  name: exp1_register
+  notes: "frozen NLLB-200 vs. LoRA on dialogue-register es-en"
+
+model:
+  src_lang: eng_Latn
+  tgt_lang: spa_Latn
+
+data:
+  loader: jsonl_dir
+  path: data/processed/opensubtitles_en_es
+  direction: both
+  filters:
+    min_tokens: 4
+    max_tokens: 60
+    max_length_ratio: 2.0
+    dedupe: true
+    # Genre metadata comes from the IMDb ids in the OPUS .ids file. Action and
+    # crime dialogue is threats and shouting; domestic conversation lives in
+    # comedy and family drama.
+    include_genres: [comedy, drama, family, romance]
+    exclude_genres: [action, war, adult, horror]
+
+training:
+  epochs: 2
+  learning_rate: 1.0e-4
+  batch_size: 8
+
+eval:
+  metrics: [chrf, bleu]
+  marker_rate: true
+  n_examples: 40

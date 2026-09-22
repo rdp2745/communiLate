@@ -1,0 +1,50 @@
+# Experiment 2 -- regional variation, Peninsular vs. Latin American Spanish.
+#
+# Two adapters over the same frozen base, trained on data differing on exactly
+# one axis: vosotros (es-ES) vs. ustedes (es-419). Build the two datasets with:
+#
+#   communilate make-regional -c exp2_regional --data-path data/processed/opensubtitles_en_es
+#
+# then train once per variant with --data-path pointing at each output folder.
+#
+# SCOPE: the plural-you axis only. This is NOT voseo -- `vos` is not a
+# Latin-America-wide feature (Mexico, most of Colombia, Peru and the Caribbean
+# are tu-using), so it needs country-level labels and a third bucket rather than
+# a Spain/LatAm binary. The transformation is also one-way: `ustedes` is the
+# formal plural in Spain too, so es-419 -> es-ES is not recoverable.
+#
+# Evaluation must be English -> Spanish. Regional variation is a property of the
+# Spanish side, so it is unobservable in the other direction.
+
+extends: base.yaml
+
+experiment:
+  name: exp2_regional
+  notes: "vosotros (es-ES) vs. ustedes (es-419) adapters over one frozen base"
+
+model:
+  src_lang: eng_Latn
+  tgt_lang: spa_Latn
+
+data:
+  loader: jsonl_dir
+  path: data/processed/regional/es-419
+  direction: as_is        # target-side adaptation only
+
+training:
+  epochs: 3
+  learning_rate: 1.0e-4
+
+eval:
+  metrics: [chrf, bleu]
+  # Given prompts that force plural "you", does the adapter produce the
+  # expected regional form? Set this to es-ES when evaluating the Peninsular
+  # adapter.
+  #
+  # ASYMMETRY: es-ES is detectable reliably (vosotros morphology is unique);
+  # es-419 often is not, because dropping the pronoun makes `pueden` identical
+  # to the third person plural. Treat the es-ES rate as the real number and
+  # report both adapters against it -- the Spain adapter should score high and
+  # the Latin American adapter near zero.
+  expected_region: es-419
+  n_examples: 40

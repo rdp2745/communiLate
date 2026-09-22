@@ -1,0 +1,25 @@
+# data — keep the folders, ignore the contents
+data/raw/*
+data/interim/*
+data/processed/*
+!data/raw/.gitkeep
+!data/interim/.gitkeep
+!data/processed/.gitkeep
+
+# runs / checkpoints
+runs/
+*.ckpt
+*.safetensors
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# misc
+.DS_Store
+.env

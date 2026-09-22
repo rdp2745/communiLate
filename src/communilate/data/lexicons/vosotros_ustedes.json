@@ -1,0 +1,81 @@
+{
+  "_comment": "Explicit vosotros -> ustedes forms that the suffix rules in regional_rules.py cannot derive. Two classes live here: (1) stem-changing verbs, where the vosotros form is the one present-tense form that does NOT stem-change, so the ustedes form must re-apply it (venis -> vienen, not venen); (2) irregular preterites and suppletive forms. Extend this file rather than the code.",
+
+  "present_indicative": {
+    "sois": "son", "estáis": "están", "habéis": "han", "vais": "van",
+    "veis": "ven", "dais": "dan", "oís": "oyen", "decís": "dicen",
+
+    "pensáis": "piensan", "empezáis": "empiezan", "comenzáis": "comienzan",
+    "cerráis": "cierran", "despertáis": "despiertan", "negáis": "niegan",
+    "recomendáis": "recomiendan", "entendéis": "entienden", "queréis": "quieren",
+    "perdéis": "pierden", "defendéis": "defienden", "encendéis": "encienden",
+    "tenéis": "tienen", "venís": "vienen", "sentís": "sienten",
+    "preferís": "prefieren", "mentís": "mienten", "herís": "hieren",
+    "convertís": "convierten", "divertís": "divierten", "sugerís": "sugieren",
+
+    "contáis": "cuentan", "encontráis": "encuentran", "recordáis": "recuerdan",
+    "mostráis": "muestran", "probáis": "prueban", "soñáis": "sueñan",
+    "voláis": "vuelan", "almorzáis": "almuerzan", "podéis": "pueden",
+    "volvéis": "vuelven", "movéis": "mueven", "resolvéis": "resuelven",
+    "devolvéis": "devuelven", "dormís": "duermen", "morís": "mueren",
+    "jugáis": "juegan",
+
+    "pedís": "piden", "servís": "sirven", "repetís": "repiten",
+    "seguís": "siguen", "conseguís": "consiguen", "vestís": "visten",
+    "medís": "miden", "elegís": "eligen", "corregís": "corrigen",
+    "impedís": "impiden", "despedís": "despiden", "reís": "ríen",
+    "freís": "fríen", "sonreís": "sonríen",
+
+    "construís": "construyen", "incluís": "incluyen", "destruís": "destruyen",
+    "huís": "huyen", "concluís": "concluyen", "influís": "influyen",
+    "contribuís": "contribuyen", "distribuís": "distribuyen"
+  },
+
+  "present_subjunctive": {
+    "seáis": "sean", "estéis": "estén", "vayáis": "vayan", "hayáis": "hayan",
+    "sepáis": "sepan", "deis": "den", "veáis": "vean",
+
+    "queráis": "quieran", "podáis": "puedan", "sintáis": "sientan",
+    "durmáis": "duerman", "muráis": "mueran", "mintáis": "mientan",
+    "prefiráis": "prefieran", "convirtáis": "conviertan",
+    "divirtáis": "diviertan", "sugiráis": "sugieran",
+    "entendáis": "entiendan", "perdáis": "pierdan", "defendáis": "defiendan",
+    "encendáis": "enciendan", "volváis": "vuelvan", "mováis": "muevan",
+    "resolváis": "resuelvan", "devolváis": "devuelvan",
+
+    "penséis": "piensen", "empecéis": "empiecen", "comencéis": "comiencen",
+    "cerréis": "cierren", "despertéis": "despierten", "neguéis": "nieguen",
+    "recomendéis": "recomienden", "contéis": "cuenten",
+    "encontréis": "encuentren", "recordéis": "recuerden",
+    "mostréis": "muestren", "probéis": "prueben", "soñéis": "sueñen",
+    "voléis": "vuelen", "almorcéis": "almuercen", "juguéis": "jueguen"
+  },
+
+  "preterite": {
+    "fuisteis": "fueron", "disteis": "dieron", "visteis": "vieron",
+    "dijisteis": "dijeron", "trajisteis": "trajeron",
+    "condujisteis": "condujeron", "produjisteis": "produjeron",
+    "leísteis": "leyeron", "oísteis": "oyeron", "creísteis": "creyeron",
+    "dormisteis": "durmieron", "moristeis": "murieron",
+    "pedisteis": "pidieron", "sentisteis": "sintieron",
+    "seguisteis": "siguieron", "servisteis": "sirvieron",
+    "repetisteis": "repitieron", "mentisteis": "mintieron",
+    "preferisteis": "prefirieron", "reísteis": "rieron"
+  },
+
+  "imperfect_and_other": {
+    "ibais": "iban", "erais": "eran", "veíais": "veían",
+    "seréis": "serán", "iréis": "irán", "haréis": "harán",
+    "diréis": "dirán", "podréis": "podrán", "tendréis": "tendrán",
+    "vendréis": "vendrán", "saldréis": "saldrán", "pondréis": "pondrán",
+    "sabréis": "sabrán", "querréis": "querrán", "habréis": "habrán"
+  },
+
+  "_exceptions_comment": "Non-verbs that end in a vosotros-looking suffix. Without these the -ís rule turns 'país' into 'paen'.",
+  "exceptions": [
+    "país", "anís", "parís", "maravedís", "marroquís", "iraquís",
+    "israelís", "ceutís", "bisturís", "esquís", "jabalís", "rubís",
+    "borceguís", "maniquís", "popurrís", "frenesí", "además", "jamás",
+    "atrás", "detrás", "quizás", "compás", "through"
+  ]
+}
