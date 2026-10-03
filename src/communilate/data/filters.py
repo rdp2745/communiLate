@@ -148,6 +148,64 @@ def include_genres(genres: Iterable[str]) -> Predicate:
     return _f
 
 
+def no_untranslated_copy() -> Predicate:
+    """Drop pairs whose two sides are the same string.
+
+    Common in subtitles: untranslated lines, proper nouns standing alone, and
+    songs left in the original. They teach the model to copy rather than
+    translate, which is a failure mode worth avoiding outright.
+    """
+
+    def _f(pair: Pair) -> bool:
+        return pair.src.strip().casefold() != pair.tgt.strip().casefold()
+
+    return _f
+
+
+def language_match() -> Predicate:
+    """Drop pairs where either side is confidently the wrong language.
+
+    Abstains on short segments rather than guessing -- see
+    :mod:`communilate.data.langid`.
+    """
+    from .langid import matches_expected
+
+    def _f(pair: Pair) -> bool:
+        return matches_expected(pair.src, pair.src_lang) and matches_expected(
+            pair.tgt, pair.tgt_lang
+        )
+
+    return _f
+
+
+def no_all_caps(min_length: int = 8) -> Predicate:
+    """Drop shouted lines.
+
+    All-caps subtitle text is usually on-screen signage, titles, or a stylistic
+    choice of one uploader, none of which is the conversational register this
+    project is after.
+    """
+
+    def _f(pair: Pair) -> bool:
+        for text in (pair.src, pair.tgt):
+            letters = [c for c in text if c.isalpha()]
+            if len(letters) >= min_length and all(c.isupper() for c in letters):
+                return False
+        return True
+
+    return _f
+
+
+def max_repeated_chars(limit: int = 4) -> Predicate:
+    """Drop lines with long character runs (``noooooo``, ``!!!!!!!``)."""
+    pattern = re.compile(rf"(.)\1{{{limit},}}")
+
+    def _f(pair: Pair) -> bool:
+        return not (pattern.search(pair.src) or pattern.search(pair.tgt))
+
+    return _f
+
+
 def _fingerprint(pair: Pair) -> str:
     key = f"{pair.src.casefold()}|||{pair.tgt.casefold()}"
     return hashlib.blake2b(key.encode("utf-8"), digest_size=16).hexdigest()
@@ -202,6 +260,18 @@ def build_chain(spec: dict) -> list[tuple[str, Predicate]]:
                 min_alignment_score(spec["min_alignment_score"]),
             )
         )
+    if spec.get("drop_untranslated", True):
+        chain.append(("untranslated_copy", no_untranslated_copy()))
+    if spec.get("drop_all_caps", True):
+        chain.append(("all_caps", no_all_caps()))
+    if spec.get("max_repeated_chars"):
+        chain.append(
+            (f"repeated_chars>{spec['max_repeated_chars']}", max_repeated_chars(spec["max_repeated_chars"]))
+        )
+    # Language ID is the most expensive predicate, so it runs last -- by then the
+    # cheap filters have already removed most of what it would have scored.
+    if spec.get("check_language", False):
+        chain.append(("language_mismatch", language_match()))
     if spec.get("include_genres"):
         chain.append(("genre_not_allowed", include_genres(spec["include_genres"])))
     if spec.get("exclude_genres"):
@@ -216,8 +286,16 @@ def apply_filters(
 ) -> Iterator[Pair]:
     """Run the configured chain, optionally de-duplicating, streaming throughout."""
     chain = build_chain(spec)
+    # dedupe: false | true ("pair") | "pair" | "src" | "tgt" | "all"
+    #
+    # "src" matters more than it looks for subtitles: the same English line is
+    # often aligned to several different Spanish lines across films, and keeping
+    # all of them teaches the model that one input has many unrelated outputs.
     dedupe = spec.get("dedupe", True)
+    dedupe_mode = "pair" if dedupe is True else (dedupe or "")
     seen_fps: set[str] = set()
+    seen_src: set[str] = set()
+    seen_tgt: set[str] = set()
     report = report if report is not None else FilterReport()
 
     for pair in pairs:
@@ -234,11 +312,23 @@ def apply_filters(
                 report.dropped[name] += 1
                 break
         else:
-            if dedupe:
+            if dedupe_mode in ("pair", "all"):
                 fp = _fingerprint(pair)
                 if fp in seen_fps:
-                    report.dropped["duplicate"] += 1
+                    report.dropped["duplicate_pair"] += 1
                     continue
                 seen_fps.add(fp)
+            if dedupe_mode in ("src", "all"):
+                key = pair.src.casefold()
+                if key in seen_src:
+                    report.dropped["duplicate_src"] += 1
+                    continue
+                seen_src.add(key)
+            if dedupe_mode in ("tgt", "all"):
+                key = pair.tgt.casefold()
+                if key in seen_tgt:
+                    report.dropped["duplicate_tgt"] += 1
+                    continue
+                seen_tgt.add(key)
             report.kept += 1
             yield pair

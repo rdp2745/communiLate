@@ -30,7 +30,8 @@ data:
     min_tokens: 4
     max_tokens: 60
     max_length_ratio: 2.0
-    dedupe: true
+    dedupe: src
+    check_language: true
     # Genre metadata comes from the IMDb ids in the OPUS .ids file. Action and
     # crime dialogue is threats and shouting; domestic conversation lives in
     # comedy and family drama.

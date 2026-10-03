@@ -44,14 +44,25 @@ data:
   # Cap records for a quick smoke run; null means no limit.
   max_records: null
 
+  # Run `communilate analyze` before trusting any of these thresholds -- they are
+  # starting points sized for OpenSubtitles, not measurements of your corpus.
   filters:
     normalise: true
-    dedupe: true
+
+    # false | pair | src | tgt | all.  "src" also drops repeat English lines
+    # aligned to different Spanish lines, which is common across films and
+    # teaches the model that one input has many unrelated outputs.
+    dedupe: pair
+
     min_tokens: 4
     max_tokens: 100
     max_length_ratio: 2.5
     drop_advertising: true
     drop_punctuation_only: true
+    drop_untranslated: true      # src == tgt: untranslated lines, proper nouns, songs
+    drop_all_caps: true          # on-screen signage and titles, not conversation
+    max_repeated_chars: 4        # "noooooo", "!!!!!!!"
+    check_language: false        # off by default: the most expensive predicate
     min_alignment_score: null
     include_genres: []
     exclude_genres: []

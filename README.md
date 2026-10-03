@@ -12,10 +12,14 @@ a code change.
 
 ## Status
 
-Architecture scaffold. The pipeline runs end to end on the data layer
-(`inspect`, `prepare`, `make-regional` are exercised by tests and verified on
-fixture data). Training and evaluation are implemented but have not been run
-against a real corpus or a GPU yet.
+Architecture scaffold plus the data pipeline. `inspect`, `analyze`, `prepare` and
+`make-regional` are covered by tests and verified end to end on a synthetic
+Moses-format corpus built to reproduce OpenSubtitles' actual defects.
+
+Not yet verified: the **network path** of `download` (its URL resolution,
+archive extraction and alignment checks are tested, but no real OPUS fetch has
+run), and **training/evaluation**, which are implemented but have never seen a
+GPU or a real corpus.
 
 ---
 
@@ -64,6 +68,8 @@ replacing it later should cost one flag.
 
 | Command | What it does |
 |---|---|
+| `download` | Fetch an OPUS corpus in Moses format, resumable, with alignment checks |
+| `analyze` | Profile a corpus *before* cleaning it — lengths, duplication, dialect markers |
 | `inspect` | Print the resolved config; `--count` also counts records per split |
 | `prepare` | Filter a raw corpus into clean JSONL, with a per-filter drop report |
 | `make-regional` | Derive `es-ES` / `es-419` variants for Experiment 2 |
@@ -71,6 +77,78 @@ replacing it later should cost one flag.
 | `evaluate` | Frozen baseline vs. adapted, writing `report.json` + `report.md` |
 | `translate` | Ad-hoc translation; `--compare` shows frozen and adapted side by side |
 | `build-memory` | Build the retrieval translation memory |
+
+---
+
+## Getting the data
+
+```bash
+# 1. download (~1GB compressed for en-es; resumes if interrupted)
+python3 scripts/download_opensubtitles.py --out data/raw/opensubtitles_en_es
+#    or, once installed:  communilate download --source en --target es
+
+# 2. LOOK AT IT before deciding how to clean it
+communilate analyze -c exp1_register \
+  --data-path data/raw/opensubtitles_en_es \
+  --set data.loader=opensubtitles \
+  --sample 0.02
+
+# 3. filter into clean JSONL, with a per-filter drop report
+communilate prepare -c exp1_register \
+  --data-path data/raw/opensubtitles_en_es \
+  --set data.loader=opensubtitles \
+  --out data/processed/opensubtitles_en_es
+```
+
+Step 2 is not optional busywork. The filter thresholds in `configs/base.yaml` are
+sized for OpenSubtitles in general, not measured on your download, and the
+profile tells you which ones actually matter. `--sample 0.02` keeps a full dump
+tractable; sampling is hash-based rather than head-of-file, because the first N
+lines of an OPUS dump are one alphabetically-early film and tell you nothing
+about the corpus.
+
+What `analyze` reports:
+
+- **Length distributions** for both sides, with a terminal histogram, plus the
+  length-ratio spread — the best single signal for timing-misaligned pairs
+- **Duplication**, separately for pairs, sources and targets. Source-only
+  duplication is the one people miss: the same English line aligned to different
+  Spanish lines across films teaches the model that one input has many unrelated
+  outputs
+- **Untranslated copies** (`src == tgt`), markup, advertising, all-caps signage
+- **Language mismatch** — an English line sitting in the Spanish column
+- **Spanish dialect markers**, which decide whether Experiment 2 is viable at
+  all: it needs Peninsular forms in usable quantity, and the `unmarked` share
+  tells you how much of the corpus carries no plural-you marking and is
+  therefore useless for that experiment
+- **Most repeated segments**, so the stock-phrase problem is visible rather than
+  inferred
+- **Estimated yield** under your configured filter chain
+
+### Cleaning
+
+The filter chain is config-driven and every filter reports what it dropped, so a
+low yield can be attributed rather than guessed at:
+
+```
+seen=5385  kept=1247  (23.16% yield)
+  dropped by min_tokens(4): 2214
+  dropped by duplicate_src: 1103
+  dropped by untranslated_copy: 453
+  dropped by length_ratio(2.0): 213
+  ...
+```
+
+Available filters (all in `data.filters`): `min_tokens`, `max_tokens`,
+`max_length_ratio`, `dedupe` (`false`/`pair`/`src`/`tgt`/`all`),
+`drop_untranslated`, `drop_all_caps`, `max_repeated_chars`, `drop_advertising`,
+`drop_punctuation_only`, `check_language`, `min_alignment_score`,
+`include_genres`, `exclude_genres`.
+
+`check_language` is off by default — it is the most expensive predicate, and it
+runs last in the chain so the cheap filters have already removed most of what it
+would otherwise score. It abstains on short segments rather than guessing, so it
+removes only confident mismatches.
 
 ---
 

@@ -30,6 +30,97 @@ def _display_path(path: Path) -> str:
         return str(path)
 
 
+def cmd_download(args) -> int:
+    """Fetch an OPUS corpus in Moses format and verify the two sides align."""
+    from .data.download import download_corpus
+
+    extracted = download_corpus(
+        corpus=args.corpus,
+        lang_a=args.source,
+        lang_b=args.target,
+        version=args.version,
+        dest_dir=args.out,
+        keep_archive=args.keep_archive,
+    )
+    print(f"\nnext: profile it before cleaning\n  communilate analyze -c base --data-path {args.out} "
+          f"--set data.loader=opensubtitles --sample 0.02")
+    return 0 if extracted.aligned else 1
+
+
+def cmd_analyze(args) -> int:
+    """Profile a corpus: lengths, duplication, language sanity, dialect markers.
+
+    Worth running before any cleaning decision -- the filter thresholds in a
+    config are guesses until this says what the corpus actually looks like.
+    """
+    from .analysis import estimate_filter_yield, profile_corpus, save_profile
+    from .data import load_split
+
+    cfg = _load(args)
+    filter_spec = cfg.get("data.filters")
+    filter_spec = filter_spec.to_dict() if hasattr(filter_spec, "to_dict") else (filter_spec or {})
+
+    profile = profile_corpus(
+        load_split(cfg, args.split), sample_rate=args.sample, top_n=args.top
+    )
+    if profile.n_sampled == 0:
+        print(f"no records sampled from split {args.split!r} at rate {args.sample}")
+        return 1
+
+    if not args.skip_filter_estimate:
+        # A second pass: the profiler consumes its iterator, and re-reading is
+        # cheaper than buffering a corpus this size in memory.
+        report = estimate_filter_yield(load_split(cfg, args.split), filter_spec)
+        profile.filter_yield = {
+            "seen": report.seen,
+            "kept": report.kept,
+            "yield_pct": report.yield_pct,
+            "dropped": dict(report.dropped),
+            "text": report.as_text(),
+        }
+
+    out_dir = Path(args.out or cfg.get("eval.output_dir", "runs/analysis")) / "profile"
+    json_path, md_path = save_profile(
+        profile, out_dir, title=f"{cfg.get('experiment.name', 'corpus')} / {args.split}"
+    )
+    print(profile_markdown_summary(profile))
+    print(f"\nfull profile: {md_path}\n              {json_path}")
+    return 0
+
+
+def profile_markdown_summary(profile) -> str:
+    """A short terminal summary; the full tables go to the report file."""
+    from .analysis import _pct
+
+    lines = [
+        "",
+        f"sampled {profile.n_sampled:,} of {profile.n_seen:,} records",
+        f"source tokens  median {profile.src_tokens.get('p50', 0):.0f}  "
+        f"p95 {profile.src_tokens.get('p95', 0):.0f}",
+        f"length ratio   median {profile.length_ratio.get('p50', 0):.2f}  "
+        f"p95 {profile.length_ratio.get('p95', 0):.2f}",
+        "",
+    ]
+    for key in (
+        "duplicate_pair", "duplicate_src", "untranslated_copy", "has_markup",
+        "advertising", "under_4_tokens", "length_ratio_over_2.5",
+        "src_language_mismatch", "tgt_language_mismatch",
+    ):
+        if key in profile.rates:
+            lines.append(f"  {key:26} {_pct(profile.rates[key])}")
+
+    if profile.dialect:
+        total = profile.n_sampled or 1
+        lines.append("")
+        lines.append("  Spanish dialect markers:")
+        for key, count in profile.dialect.items():
+            lines.append(f"    {key:24} {_pct(count / total)}")
+
+    if profile.filter_yield:
+        lines += ["", f"  configured filters keep {profile.filter_yield['yield_pct']:.2f}%"]
+    return "\n".join(lines)
+
+
 def _add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--config", "-c", required=True, help="config name or path (e.g. exp1_register)"
@@ -289,6 +380,29 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--adapter", default=None)
     p.add_argument("--compare", action="store_true", help="show frozen and adapted side by side")
     p.set_defaults(func=cmd_translate)
+
+    p = sub.add_parser("download", help="fetch an OPUS corpus (Moses format)")
+    p.add_argument("--corpus", default="OpenSubtitles")
+    p.add_argument("--source", default="en", help="ISO-639-1 code, e.g. en")
+    p.add_argument("--target", default="es", help="ISO-639-1 code, e.g. es")
+    p.add_argument("--version", default="latest")
+    p.add_argument("--out", default="data/raw/opensubtitles_en_es")
+    p.add_argument("--keep-archive", action="store_true", help="do not delete the zip")
+    p.set_defaults(func=cmd_download)
+
+    p = sub.add_parser("analyze", help="profile a corpus before cleaning it")
+    _add_common(p)
+    p.add_argument("--split", default="train")
+    p.add_argument(
+        "--sample",
+        type=float,
+        default=1.0,
+        help="fraction of records to profile (hash-based, reproducible). Use ~0.02 on a full OpenSubtitles dump.",
+    )
+    p.add_argument("--top", type=int, default=15, help="how many repeated segments to list")
+    p.add_argument("--out", default=None)
+    p.add_argument("--skip-filter-estimate", action="store_true")
+    p.set_defaults(func=cmd_analyze)
 
     p = sub.add_parser("build-memory", help="build the retrieval translation memory")
     _add_common(p)

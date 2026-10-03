@@ -57,8 +57,54 @@ def test_dedupe_removes_repeats_and_is_reported():
     report = FilterReport()
     kept = list(apply_filters([make(1), make(2)], {"min_tokens": 1, "dedupe": True}, report))
     assert len(kept) == 1
-    assert report.dropped["duplicate"] == 1
+    assert report.dropped["duplicate_pair"] == 1
     assert report.seen == 2 and report.kept == 1
+
+
+def test_dedupe_src_mode_catches_one_source_many_targets():
+    # The same English line aligned to different Spanish lines across films is
+    # common in subtitles, and pair-level dedupe does not catch it.
+    same_src = [
+        make(1, tgt="¿Vosotros venís luego a casa?"),
+        make(2, tgt="¿Vosotros venís más tarde aquí?"),
+    ]
+    assert len(list(apply_filters(same_src, {"min_tokens": 1, "dedupe": "pair"}))) == 2
+    assert len(list(apply_filters(same_src, {"min_tokens": 1, "dedupe": "src"}))) == 1
+
+
+def test_dedupe_can_be_disabled():
+    assert len(list(apply_filters([make(1), make(2)], {"min_tokens": 1, "dedupe": False}))) == 2
+
+
+def test_untranslated_copies_are_dropped():
+    copy = make(2, src="Madrid 1987", tgt="Madrid 1987")
+    kept = list(apply_filters([make(1), copy], {"min_tokens": 1, "dedupe": False}))
+    assert [p.id for p in kept] == ["t1"]
+
+
+def test_all_caps_is_dropped():
+    shouted = make(2, src="STOP THE CAR NOW", tgt="PARA EL COCHE AHORA")
+    kept = list(apply_filters([make(1), shouted], {"min_tokens": 1, "dedupe": False}))
+    assert [p.id for p in kept] == ["t1"]
+
+
+def test_repeated_character_runs_are_dropped():
+    spam = make(2, src="Noooooooo do not", tgt="Noooooooo no lo hagas")
+    kept = list(apply_filters(
+        [make(1), spam], {"min_tokens": 1, "dedupe": False, "max_repeated_chars": 4}
+    ))
+    assert [p.id for p in kept] == ["t1"]
+
+
+def test_language_check_drops_wrong_language_but_abstains_on_short_text():
+    wrong = make(2, src="the and you that was for", tgt="the and you that was for now")
+    short = make(3, src="Hola amigo", tgt="Hey friend")
+    kept = list(apply_filters(
+        [make(1), wrong, short],
+        {"min_tokens": 1, "dedupe": False, "check_language": True, "drop_untranslated": False},
+    ))
+    # The confidently-wrong pair goes; the too-short one is kept rather than guessed at.
+    assert [p.id for p in kept] == ["t1", "t3"]
 
 
 def test_genre_filters_only_apply_to_records_that_have_metadata():
