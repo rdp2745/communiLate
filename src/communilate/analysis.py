@@ -132,6 +132,9 @@ class CorpusProfile:
     genres: dict[str, int] = field(default_factory=dict)
 
     filter_yield: dict = field(default_factory=dict)
+    truncated: bool = False
+    max_tracked: int = 0
+    top_segment_share: float = 0.0
     _ratio_values: list = field(default_factory=list, repr=False)
     _src_token_values: list = field(default_factory=list, repr=False)
 
@@ -143,14 +146,40 @@ class CorpusProfile:
         }
 
 
+# Tracking every distinct string in a large sample is what makes a profiler run
+# out of memory: at 2M sampled records the dedupe sets and segment counters
+# together run to several GB. Past this many distinct keys the structures stop
+# growing and the report says so, which keeps the run bounded instead of killed.
+DEFAULT_MAX_TRACKED = 400_000
+
+
 def profile_corpus(
     pairs: Iterable[Pair],
     sample_rate: float = 1.0,
     top_n: int = 15,
     filter_spec: dict | None = None,
+    max_tracked: int = DEFAULT_MAX_TRACKED,
 ) -> CorpusProfile:
-    """Walk a corpus once and collect everything worth knowing about it."""
+    """Walk a corpus once and collect everything worth knowing about it.
+
+    ``max_tracked`` bounds the memory of the duplicate-detection sets and the
+    segment/vocabulary counters. Length statistics and every rate are unaffected;
+    only duplicate counts and the "most repeated" table degrade, and the report
+    marks itself truncated when that happens.
+    """
     profile = CorpusProfile(sample_rate=sample_rate)
+    truncated = False
+
+    def _track(seen: set, key: str) -> bool:
+        """Return True if ``key`` was already present; add it while under budget."""
+        nonlocal truncated
+        if key in seen:
+            return True
+        if len(seen) < max_tracked:
+            seen.add(key)
+        else:
+            truncated = True
+        return False
 
     src_token_counts: list[int] = []
     tgt_token_counts: list[int] = []
@@ -163,9 +192,9 @@ def profile_corpus(
     tgt_vocab: Counter[str] = Counter()
     genres: Counter[str] = Counter()
 
-    seen_pair_fp: set[str] = set()
-    seen_src: set[str] = set()
-    seen_tgt: set[str] = set()
+    seen_pair_fp: set[bytes] = set()
+    seen_src: set[bytes] = set()
+    seen_tgt: set[bytes] = set()
 
     tally = Counter()
 
@@ -189,28 +218,33 @@ def profile_corpus(
         if n_src and n_tgt:
             ratios.append(max(n_src, n_tgt) / min(n_src, n_tgt))
 
-        src_segments[src] += 1
-        tgt_segments[tgt] += 1
-        src_vocab.update(t.lower() for t in src_tokens)
-        tgt_vocab.update(t.lower() for t in tgt_tokens)
+        # Counters are capped the same way: an existing key still increments, a
+        # new one is only admitted while there is budget.
+        if src in src_segments or len(src_segments) < max_tracked:
+            src_segments[src] += 1
+        if tgt in tgt_segments or len(tgt_segments) < max_tracked:
+            tgt_segments[tgt] += 1
+        for token in src_tokens:
+            key = token.lower()
+            if key in src_vocab or len(src_vocab) < max_tracked:
+                src_vocab[key] += 1
+        for token in tgt_tokens:
+            key = token.lower()
+            if key in tgt_vocab or len(tgt_vocab) < max_tracked:
+                tgt_vocab[key] += 1
 
         # --- quality signals ---
+        # 8-byte digests rather than 16: at this scale the halved memory matters
+        # more than a collision probability that is still negligible.
         fingerprint = hashlib.blake2b(
-            f"{src.casefold()}|||{tgt.casefold()}".encode(), digest_size=16
-        ).hexdigest()
-        if fingerprint in seen_pair_fp:
+            f"{src.casefold()}|||{tgt.casefold()}".encode(), digest_size=8
+        ).digest()
+        if _track(seen_pair_fp, fingerprint):
             tally["duplicate_pair"] += 1
-        else:
-            seen_pair_fp.add(fingerprint)
-
-        if src.casefold() in seen_src:
+        if _track(seen_src, hashlib.blake2b(src.casefold().encode(), digest_size=8).digest()):
             tally["duplicate_src"] += 1
-        else:
-            seen_src.add(src.casefold())
-        if tgt.casefold() in seen_tgt:
+        if _track(seen_tgt, hashlib.blake2b(tgt.casefold().encode(), digest_size=8).digest()):
             tally["duplicate_tgt"] += 1
-        else:
-            seen_tgt.add(tgt.casefold())
 
         if src.strip().casefold() == tgt.strip().casefold():
             tally["untranslated_copy"] += 1
@@ -292,6 +326,9 @@ def profile_corpus(
     profile.genres = dict(genres.most_common(25))
     profile._ratio_values = ratios
     profile._src_token_values = src_token_counts
+    profile.truncated = truncated
+    profile.max_tracked = max_tracked
+    profile.top_segment_share = sum(e["pct"] for e in profile.top_src_segments) / 100.0
 
     return profile
 
@@ -309,11 +346,28 @@ def _vocab_stats(counter: Counter) -> dict:
     }
 
 
-def estimate_filter_yield(pairs: Iterable[Pair], filter_spec: dict) -> FilterReport:
-    """Run the configured filter chain purely to measure what it would keep."""
+def estimate_filter_yield(
+    pairs: Iterable[Pair], filter_spec: dict, sample_rate: float = 1.0
+) -> FilterReport:
+    """Run the configured filter chain purely to measure what it would keep.
+
+    Sampled with the same hash as the profiler, because an unsampled pass over a
+    100M-segment corpus both takes a long time and builds dedupe structures sized
+    for the whole corpus. Note that the dedupe component of the yield is itself
+    sample-dependent for the reason given in :func:`profile_corpus` -- rare
+    duplicates go unseen, so the sampled yield is an *over*estimate when
+    de-duplication is on.
+    """
     report = FilterReport()
-    for _ in apply_filters(pairs, filter_spec, report):
+    stream = pairs if sample_rate >= 1.0 else (p for p in pairs if hash_sample(p.id, sample_rate))
+    for _ in apply_filters(stream, filter_spec, report):
         pass
+    if sample_rate < 1.0 and filter_spec.get("dedupe"):
+        report.warnings.append(
+            f"yield estimated on a {sample_rate:g} sample with de-duplication on, so "
+            f"the real yield will be lower: duplicates the sample never saw twice "
+            f"are not counted."
+        )
     return report
 
 
@@ -349,7 +403,29 @@ def profile_to_markdown(profile: CorpusProfile, title: str = "Corpus profile") -
         lines += text_histogram(profile._src_token_values)
         lines.append("```")
 
-    lines += ["", "## Quality signals", "", "| signal | count | rate |", "|---|---|---|"]
+    lines += ["", "## Quality signals", ""]
+
+    if profile.sample_rate < 1.0:
+        lines += [
+            f"> **Duplicate rates below are lower bounds.** At sample rate "
+            f"{profile.sample_rate:g} a pair occurring *k* times in the corpus",
+            f"> contributes about `max(0, k x {profile.sample_rate:g} - 1)` detected duplicates, so a pair",
+            "> occurring only two or three times is almost never caught twice in the",
+            "> sample. Frequent stock phrases are measured reliably; rare repeats are",
+            "> invisible. Use **top-segment share** below for the number that actually",
+            "> drives overfitting, and re-run with `--sample 1.0` on a subset if you need",
+            "> an exact duplicate rate.",
+            "",
+        ]
+    if profile.truncated:
+        lines += [
+            f"> **Tracking truncated** at {profile.max_tracked:,} distinct keys to bound memory.",
+            "> Length statistics and all rates are unaffected; duplicate counts and the",
+            "> most-repeated table understate. Raise `--max-tracked` or lower `--sample`.",
+            "",
+        ]
+
+    lines += ["| signal | count | rate |", "|---|---|---|"]
     for key, count in profile.counts.items():
         if key.startswith("dialect_") or key.startswith("marker_"):
             continue
@@ -391,8 +467,12 @@ def profile_to_markdown(profile: CorpusProfile, title: str = "Corpus profile") -
         "",
         "## Most repeated segments",
         "",
-        "A high share here is the stock-phrase problem: without de-duplication a",
-        "LoRA spends much of its capacity on these.",
+        f"**Top-{len(profile.top_src_segments)} share: {_pct(profile.top_segment_share)} of all sampled segments.**",
+        "",
+        "This is the reliable concentration measure -- frequent items are sampled",
+        "well, so unlike the duplicate rates above it does not depend on the sample",
+        "rate. A high share is the stock-phrase problem: without de-duplication a",
+        "LoRA spends much of its capacity learning these few lines.",
         "",
         "| count | share | source segment |",
         "|---|---|---|",

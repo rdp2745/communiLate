@@ -326,7 +326,9 @@ def extract_archive(archive: Path, dest: Path, pair: str) -> ExtractedCorpus:
             )
         side_files[lang] = max(matches, key=lambda p: p.stat().st_size)
 
-    ids_matches = sorted(dest.rglob("*.ids"))
+    # v2018 ships the ids file inside the Moses zip; later releases may ship it
+    # gzipped, or not at all.
+    ids_matches = sorted(dest.rglob("*.ids")) + sorted(dest.rglob("*.ids.gz"))
     ids_file = ids_matches[0] if ids_matches else None
 
     line_counts = {lang: count_lines(path) for lang, path in side_files.items()}
@@ -373,7 +375,14 @@ def download_corpus(
         print(f"  {lang}: {path.name} ({_format_bytes(path.stat().st_size)})")
     print(f"  ids: {extracted.ids_file.name if extracted.ids_file else 'MISSING'}")
     if extracted.ids_file is None:
-        print("  (without the .ids file there are no IMDb ids, so genre filtering is unavailable)")
+        print(
+            "\n  No .ids file in this release, so there are no IMDb ids and genre\n"
+            "  filtering is unavailable. Genre filters in a config will silently pass\n"
+            "  every record rather than erroring -- remove them, or try fetching the\n"
+            f"  ids separately:\n"
+            f"    {OPUS_OBJECT_STORE}/OPUS-{release.corpus}/{release.version}/ids/{release.pair}.ids.gz\n"
+            "  (best effort: not every release publishes one)"
+        )
 
     if not keep_archive:
         archive.unlink(missing_ok=True)

@@ -131,3 +131,66 @@ def test_profile_of_empty_corpus_does_not_crash():
     profile = profile_corpus([])
     assert profile.n_sampled == 0
     assert profile_to_markdown(profile)
+
+
+# -- memory bounds ------------------------------------------------------
+
+def test_tracking_is_bounded_and_reports_truncation():
+    # At 2M sampled records the unbounded dedupe sets and segment counters ran to
+    # several GB. Past the budget they stop growing and the report says so.
+    pairs = [mk(i, src=f"Unique english sentence number {i} here.",
+                tgt=f"Oración única en español número {i} aquí.") for i in range(500)]
+    profile = profile_corpus(pairs, max_tracked=50)
+    assert profile.truncated is True
+    assert profile.max_tracked == 50
+    # Rates and length statistics are unaffected by truncation.
+    assert profile.n_sampled == 500
+    assert profile.src_tokens["p50"] > 0
+
+
+def test_untruncated_profile_does_not_claim_truncation():
+    profile = profile_corpus([mk(i) for i in range(10)], max_tracked=10_000)
+    assert profile.truncated is False
+
+
+def test_top_segment_share_is_reported():
+    # The concentration measure that stays reliable at any sample rate, unlike
+    # the duplicate rates.
+    pairs = [mk(i, src="What?", tgt="¿Qué?") for i in range(90)]
+    pairs += [mk(100 + i, src=f"A longer distinct sentence {i} goes here.") for i in range(10)]
+    profile = profile_corpus(pairs)
+    assert profile.top_segment_share > 0.5
+
+
+def test_markdown_warns_that_sampled_duplicate_rates_are_lower_bounds():
+    profile = profile_corpus([mk(i) for i in range(50)], sample_rate=0.5)
+    text = profile_to_markdown(profile)
+    assert "lower bounds" in text
+
+
+def test_markdown_omits_the_sampling_warning_at_full_rate():
+    profile = profile_corpus([mk(i) for i in range(10)], sample_rate=1.0)
+    assert "lower bounds" not in profile_to_markdown(profile)
+
+
+def test_yield_estimate_can_be_sampled():
+    from communilate.analysis import estimate_filter_yield
+
+    pairs = [mk(i, src=f"Distinct english sentence number {i} goes here.") for i in range(1000)]
+    full = estimate_filter_yield(pairs, {"min_tokens": 1, "dedupe": False})
+    sampled = estimate_filter_yield(
+        [mk(i, src=f"Distinct english sentence number {i} goes here.") for i in range(1000)],
+        {"min_tokens": 1, "dedupe": False},
+        sample_rate=0.2,
+    )
+    assert full.seen == 1000
+    assert 100 < sampled.seen < 300
+
+
+def test_sampled_yield_warns_when_dedupe_is_on():
+    from communilate.analysis import estimate_filter_yield
+
+    report = estimate_filter_yield(
+        [mk(i) for i in range(100)], {"min_tokens": 1, "dedupe": "pair"}, sample_rate=0.5
+    )
+    assert any("sample" in w for w in report.warnings)

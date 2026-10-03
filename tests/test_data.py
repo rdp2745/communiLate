@@ -208,3 +208,92 @@ def test_swapping_data_path_is_the_only_change_needed(tmp_path):
 
     cfg = load_config("exp1_register", [f"data.path={corpus_b}", "data.direction=as_is"])
     assert len(list(load_split(cfg, "train"))) == 4
+
+
+# -- regression: generator/consumer interaction ------------------------
+
+def test_filters_do_not_mutate_the_records_they_are_given():
+    # apply_direction derives the reversed pair after the forward one has been
+    # consumed, so a consumer mutating the record in place corrupted a record the
+    # producer was about to read.
+    original = make(1, src="<i>Are you all coming later?</i>", tgt="- ¿Vosotros venís luego?")
+    list(apply_filters([original], {"min_tokens": 1}))
+    assert original.src == "<i>Are you all coming later?</i>"
+    assert original.tgt == "- ¿Vosotros venís luego?"
+
+
+def test_pure_markup_lines_drop_cleanly_in_both_directions():
+    # Repro for the crash on real OpenSubtitles: "[gunshot]" normalises to an
+    # empty string, and the reversed pair was then built from the emptied record,
+    # raising SchemaError mid-stream instead of being filtered out.
+    pairs = [
+        make(1, src="[gunshot]", tgt="[disparo]"),
+        make(2, src="<i>Are you all coming later?</i>", tgt="- ¿Vosotros venís luego?"),
+    ]
+    report = FilterReport()
+    kept = list(apply_filters(apply_direction(pairs, "both"), {"min_tokens": 1, "dedupe": False}, report))
+
+    assert [p.id for p in kept] == ["t2", "t2::rev"]
+    assert report.dropped["empty_after_normalise"] == 2
+    # Normalisation is applied to the surviving pair in both directions.
+    assert kept[0].src == "Are you all coming later?"
+    assert kept[1].tgt == "Are you all coming later?"
+
+
+def test_normalisation_propagates_into_the_reversed_pair():
+    pairs = [make(1, src="<i>Hello there my friend</i>", tgt="- Hola amigo mío querido")]
+    kept = list(apply_filters(apply_direction(pairs, "both"), {"min_tokens": 1, "dedupe": False}))
+    assert kept[0].src == "Hello there my friend"
+    assert kept[1].src == "Hola amigo mío querido"
+
+
+def test_genre_filters_warn_when_the_corpus_has_no_genre_metadata():
+    # Genre predicates pass records without metadata, so on a release with no
+    # .ids file they are silent no-ops. The report has to say so, or a config
+    # looks like it filtered something it did not.
+    report = FilterReport()
+    list(apply_filters([make(1), make(2)], {"min_tokens": 1, "dedupe": False,
+                                           "include_genres": ["comedy"]}, report))
+    assert report.kept == 2
+    assert any("no effect" in w for w in report.warnings)
+
+
+def test_no_genre_warning_when_metadata_is_present():
+    report = FilterReport()
+    list(apply_filters(
+        [make(1, meta={"genres": ["Comedy"]})],
+        {"min_tokens": 1, "dedupe": False, "include_genres": ["comedy"]},
+        report,
+    ))
+    assert report.warnings == []
+
+
+def test_no_genre_warning_when_no_genre_filters_configured():
+    report = FilterReport()
+    list(apply_filters([make(1)], {"min_tokens": 1, "dedupe": False}, report))
+    assert report.warnings == []
+
+
+def test_dedupe_budget_is_bounded_and_warns():
+    # Unbounded, a dedupe set over 105M OpenSubtitles segments runs to tens of GB
+    # and kills the process. Past the budget records pass through undeduplicated
+    # and the report says so -- partial dedupe rather than a crash.
+    pairs = [make(i, src=f"Distinct english sentence number {i} here.") for i in range(200)]
+    pairs += [make(1000 + i, src=f"Distinct english sentence number {i} here.") for i in range(200)]
+    report = FilterReport()
+    kept = list(apply_filters(
+        pairs, {"min_tokens": 1, "dedupe": "src", "max_dedupe_keys": 50}, report
+    ))
+    assert any("budget" in w for w in report.warnings)
+    # Within budget the duplicates were still caught.
+    assert report.dropped["duplicate_src"] >= 50
+    assert len(kept) > 50
+
+
+def test_dedupe_within_budget_does_not_warn():
+    report = FilterReport()
+    list(apply_filters(
+        [make(1), make(2)], {"min_tokens": 1, "dedupe": "pair", "max_dedupe_keys": 1000}, report
+    ))
+    assert report.warnings == []
+    assert report.dropped["duplicate_pair"] == 1

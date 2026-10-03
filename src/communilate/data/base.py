@@ -58,10 +58,15 @@ def apply_direction(pairs: Iterable[Pair], direction: str) -> Iterator[Pair]:
     if direction not in DIRECTIONS:
         raise ValueError(f"direction must be one of {DIRECTIONS}, got {direction!r}")
     for pair in pairs:
+        # Derive the reversed pair before yielding anything. Generators
+        # interleave with their consumer, so computing it after the forward yield
+        # would read whatever state the consumer left the record in -- defence in
+        # depth alongside the consumers themselves not mutating.
+        reversed_pair = pair.swapped() if direction in ("swap", "both") else None
         if direction in ("as_is", "both"):
             yield pair
-        if direction in ("swap", "both"):
-            yield pair.swapped()
+        if reversed_pair is not None:
+            yield reversed_pair
 
 
 def load_split(cfg: Config, split: str) -> Iterator[Pair]:

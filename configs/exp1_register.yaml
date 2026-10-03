@@ -32,11 +32,18 @@ data:
     max_length_ratio: 2.0
     dedupe: src
     check_language: true
-    # Genre metadata comes from the IMDb ids in the OPUS .ids file. Action and
-    # crime dialogue is threats and shouting; domestic conversation lives in
-    # comedy and family drama.
-    include_genres: [comedy, drama, family, romance]
-    exclude_genres: [action, war, adult, horror]
+
+    # Genre filtering needs the IMDb ids from the OPUS .ids file, and the v2024
+    # OpenSubtitles release does not ship one -- so these are left empty. With no
+    # genre metadata the predicates pass every record, which makes them silent
+    # no-ops rather than errors; `prepare` warns if you set them anyway.
+    #
+    # To enable: use a release that includes .ids (v2018 did), build a
+    # {imdb_id: [genre]} map, and point data.genre_map at it. Action and crime
+    # dialogue is threats and shouting; domestic conversation lives in comedy and
+    # family drama, so that filter is worth having when the metadata exists.
+    include_genres: []
+    exclude_genres: []
 
 training:
   epochs: 2

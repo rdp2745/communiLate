@@ -114,7 +114,7 @@ python3 scripts/download_opensubtitles.py --out data/raw/opensubtitles_en_es
 communilate analyze -c exp1_register \
   --data-path data/raw/opensubtitles_en_es \
   --set data.loader=opensubtitles \
-  --sample 0.02
+  --sample 0.002
 
 # 3. filter into clean JSONL, with a per-filter drop report
 communilate prepare -c exp1_register \
@@ -125,10 +125,25 @@ communilate prepare -c exp1_register \
 
 Step 2 is not optional busywork. The filter thresholds in `configs/base.yaml` are
 sized for OpenSubtitles in general, not measured on your download, and the
-profile tells you which ones actually matter. `--sample 0.02` keeps a full dump
-tractable; sampling is hash-based rather than head-of-file, because the first N
-lines of an OPUS dump are one alphabetically-early film and tell you nothing
-about the corpus.
+profile tells you which ones actually matter. Sampling is hash-based rather than
+head-of-file, because the first N lines of an OPUS dump are one
+alphabetically-early film and tell you nothing about the corpus.
+
+**Pick the sample rate from the corpus size.** The v2024 en-es release is ~105M
+segments; `--sample 0.002` is ~210k records, which is plenty for length
+distributions and marker rates and runs in minutes. The full stream is read
+either way — sampling bounds the *tracking structures*, not the read.
+
+**Duplicate rates on a sample are lower bounds.** At rate *r*, a pair occurring
+*k* times contributes about `max(0, k·r − 1)` detected duplicates, so a pair
+occurring two or three times is almost never caught twice. Frequent stock phrases
+are measured reliably; rare repeats are invisible. The report says so, and prints
+**top-segment share** alongside — that one is reliable at any sample rate, and
+it's the number that actually drives overfitting.
+
+Memory is bounded by `--max-tracked` (default 400k distinct keys). Past that the
+duplicate counts and most-repeated table understate, and the report marks itself
+truncated rather than growing without limit.
 
 What `analyze` reports:
 
@@ -148,6 +163,12 @@ What `analyze` reports:
   inferred
 - **Estimated yield** under your configured filter chain
 
+**Genre filtering needs the `.ids` file, and the v2024 release does not ship one.**
+Without IMDb ids the genre predicates pass every record — a silent no-op, not an
+error — so `include_genres`/`exclude_genres` are empty in `exp1_register.yaml` and
+`prepare` warns if you set them anyway. v2018 did include `.ids` if you want genre
+filtering badly enough to use the older release.
+
 ### Cleaning
 
 The filter chain is config-driven and every filter reports what it dropped, so a
@@ -161,6 +182,12 @@ seen=5385  kept=1247  (23.16% yield)
   dropped by length_ratio(2.0): 213
   ...
 ```
+
+De-duplication is memory-bounded by `max_dedupe_keys` (default 5M). Dedupe runs
+*after* the predicate chain, so the budget only has to cover records that survived
+everything else; if it is exhausted, later records pass through undeduplicated and
+the report warns rather than the process dying. A set of 105M casefolded strings
+is tens of gigabytes, which is why this is capped.
 
 Available filters (all in `data.filters`): `min_tokens`, `max_tokens`,
 `max_length_ratio`, `dedupe` (`false`/`pair`/`src`/`tgt`/`all`),

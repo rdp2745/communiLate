@@ -61,7 +61,10 @@ def cmd_analyze(args) -> int:
     filter_spec = filter_spec.to_dict() if hasattr(filter_spec, "to_dict") else (filter_spec or {})
 
     profile = profile_corpus(
-        load_split(cfg, args.split), sample_rate=args.sample, top_n=args.top
+        load_split(cfg, args.split),
+        sample_rate=args.sample,
+        top_n=args.top,
+        max_tracked=args.max_tracked,
     )
     if profile.n_sampled == 0:
         print(f"no records sampled from split {args.split!r} at rate {args.sample}")
@@ -70,14 +73,19 @@ def cmd_analyze(args) -> int:
     if not args.skip_filter_estimate:
         # A second pass: the profiler consumes its iterator, and re-reading is
         # cheaper than buffering a corpus this size in memory.
-        report = estimate_filter_yield(load_split(cfg, args.split), filter_spec)
+        report = estimate_filter_yield(
+            load_split(cfg, args.split), filter_spec, sample_rate=args.sample
+        )
         profile.filter_yield = {
             "seen": report.seen,
             "kept": report.kept,
             "yield_pct": report.yield_pct,
             "dropped": dict(report.dropped),
             "text": report.as_text(),
+            "warnings": list(report.warnings),
         }
+        for warning in report.warnings:
+            print(f"WARNING: {warning}")
 
     out_dir = Path(args.out or cfg.get("eval.output_dir", "runs/analysis")) / "profile"
     json_path, md_path = save_profile(
@@ -116,6 +124,19 @@ def profile_markdown_summary(profile) -> str:
         for key, count in profile.dialect.items():
             lines.append(f"    {key:24} {_pct(count / total)}")
 
+    lines += [
+        "",
+        f"  top-{len(profile.top_src_segments)} segment share   "
+        f"{_pct(profile.top_segment_share)}  (reliable at any sample rate)",
+    ]
+    if profile.sample_rate < 1.0:
+        lines.append(
+            f"  NB duplicate rates are LOWER BOUNDS at sample rate {profile.sample_rate:g}"
+        )
+    if profile.truncated:
+        lines.append(
+            f"  NB tracking truncated at {profile.max_tracked:,} keys; duplicate counts understate"
+        )
     if profile.filter_yield:
         lines += ["", f"  configured filters keep {profile.filter_yield['yield_pct']:.2f}%"]
     return "\n".join(lines)
@@ -400,6 +421,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="fraction of records to profile (hash-based, reproducible). Use ~0.02 on a full OpenSubtitles dump.",
     )
     p.add_argument("--top", type=int, default=15, help="how many repeated segments to list")
+    p.add_argument(
+        "--max-tracked",
+        type=int,
+        default=400_000,
+        help="cap on distinct keys held for duplicate detection and segment counting "
+        "(bounds memory; raise it if the report says it truncated)",
+    )
     p.add_argument("--out", default=None)
     p.add_argument("--skip-filter-estimate", action="store_true")
     p.set_defaults(func=cmd_analyze)

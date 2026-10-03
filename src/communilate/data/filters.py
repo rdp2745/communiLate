@@ -13,7 +13,7 @@ import hashlib
 import re
 import unicodedata
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Callable, Iterable, Iterator
 
 from ..schema import Pair
@@ -206,9 +206,14 @@ def max_repeated_chars(limit: int = 4) -> Predicate:
     return _f
 
 
-def _fingerprint(pair: Pair) -> str:
+def _digest(text: str) -> bytes:
+    """8-byte digest of casefolded text, used as a memory-cheap dedupe key."""
+    return hashlib.blake2b(text.casefold().encode("utf-8"), digest_size=8).digest()
+
+
+def _fingerprint(pair: Pair) -> bytes:
     key = f"{pair.src.casefold()}|||{pair.tgt.casefold()}"
-    return hashlib.blake2b(key.encode("utf-8"), digest_size=16).hexdigest()
+    return hashlib.blake2b(key.encode("utf-8"), digest_size=8).digest()
 
 
 @dataclass
@@ -218,15 +223,21 @@ class FilterReport:
     seen: int = 0
     kept: int = 0
     dropped: Counter = None  # type: ignore[assignment]
+    warnings: list = None  # type: ignore[assignment]
+    n_with_genres: int = 0
 
     def __post_init__(self) -> None:
         if self.dropped is None:
             self.dropped = Counter()
+        if self.warnings is None:
+            self.warnings = []
 
     def as_text(self) -> str:
         lines = [f"seen={self.seen}  kept={self.kept}  ({self.yield_pct:.2f}% yield)"]
         for name, count in self.dropped.most_common():
             lines.append(f"  dropped by {name}: {count}")
+        for warning in self.warnings:
+            lines.append(f"  WARNING: {warning}")
         return "\n".join(lines)
 
     @property
@@ -293,19 +304,49 @@ def apply_filters(
     # all of them teaches the model that one input has many unrelated outputs.
     dedupe = spec.get("dedupe", True)
     dedupe_mode = "pair" if dedupe is True else (dedupe or "")
-    seen_fps: set[str] = set()
-    seen_src: set[str] = set()
-    seen_tgt: set[str] = set()
+
+    # Dedupe memory has to be bounded. OpenSubtitles en-es is ~105M segments, and
+    # a set of that many casefolded strings runs to tens of gigabytes -- enough to
+    # kill the process on a laptop. Two mitigations: keys are 8-byte digests
+    # rather than the text itself, and the set stops growing past a budget.
+    #
+    # Dedupe runs after the predicate chain, so the budget only has to cover
+    # records that survived everything else. Once it is exhausted, later records
+    # pass through undeduplicated and the report says so -- partial dedupe, not a
+    # crash. Raise max_dedupe_keys if you have the RAM, or filter harder first.
+    max_dedupe_keys = int(spec.get("max_dedupe_keys", 5_000_000))
+    seen_fps: set[bytes] = set()
+    seen_src: set[bytes] = set()
+    seen_tgt: set[bytes] = set()
+    dedupe_budget_hit = False
     report = report if report is not None else FilterReport()
+
+    def _is_dup(seen: set, key: bytes) -> bool:
+        nonlocal dedupe_budget_hit
+        if key in seen:
+            return True
+        if len(seen) < max_dedupe_keys:
+            seen.add(key)
+        else:
+            dedupe_budget_hit = True
+        return False
 
     for pair in pairs:
         report.seen += 1
+        if pair.meta.get("genres"):
+            report.n_with_genres += 1
         if spec.get("normalise", True):
-            pair.src = normalise_text(pair.src)
-            pair.tgt = normalise_text(pair.tgt)
-            if not pair.src or not pair.tgt:
+            # Replace rather than mutate. The upstream iterator may still hold a
+            # reference to this record -- apply_direction derives the reversed
+            # pair *after* the forward one has been consumed -- so mutating in
+            # place corrupts a record the producer is about to read.
+            src = normalise_text(pair.src)
+            tgt = normalise_text(pair.tgt)
+            if not src or not tgt:
                 report.dropped["empty_after_normalise"] += 1
                 continue
+            if src != pair.src or tgt != pair.tgt:
+                pair = replace(pair, src=src, tgt=tgt)
 
         for name, predicate in chain:
             if not predicate(pair):
@@ -313,22 +354,34 @@ def apply_filters(
                 break
         else:
             if dedupe_mode in ("pair", "all"):
-                fp = _fingerprint(pair)
-                if fp in seen_fps:
+                if _is_dup(seen_fps, _fingerprint(pair)):
                     report.dropped["duplicate_pair"] += 1
                     continue
-                seen_fps.add(fp)
             if dedupe_mode in ("src", "all"):
-                key = pair.src.casefold()
-                if key in seen_src:
+                if _is_dup(seen_src, _digest(pair.src)):
                     report.dropped["duplicate_src"] += 1
                     continue
-                seen_src.add(key)
             if dedupe_mode in ("tgt", "all"):
-                key = pair.tgt.casefold()
-                if key in seen_tgt:
+                if _is_dup(seen_tgt, _digest(pair.tgt)):
                     report.dropped["duplicate_tgt"] += 1
                     continue
-                seen_tgt.add(key)
             report.kept += 1
             yield pair
+
+    if dedupe_budget_hit:
+        report.warnings.append(
+            f"de-duplication budget of {max_dedupe_keys:,} keys was exhausted, so "
+            f"records after that point passed through undeduplicated. Duplicate "
+            f"counts understate. Raise data.filters.max_dedupe_keys, or tighten the "
+            f"other filters so fewer records reach the dedupe stage."
+        )
+
+    # Genre predicates pass records that carry no genre metadata, so a corpus
+    # without an .ids file makes them silent no-ops rather than errors. Say so
+    # instead of letting a config look like it filtered something.
+    if (spec.get("include_genres") or spec.get("exclude_genres")) and not report.n_with_genres:
+        report.warnings.append(
+            "genre filters are configured but no record carried genre metadata, so "
+            "they had no effect. This release has no .ids file (no IMDb ids), so "
+            "genre filtering is unavailable -- remove include_genres/exclude_genres."
+        )
