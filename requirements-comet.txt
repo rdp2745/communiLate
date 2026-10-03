@@ -1,0 +1,17 @@
+# COMET is kept out of requirements.txt on purpose.
+#
+# It pulls in pytorch-lightning and pins transitive versions tightly, so it is
+# the single most likely dependency to fail an install or to drag the rest of the
+# stack to older versions. Nothing in the pipeline needs it: `eval.metrics`
+# reports a per-metric error and carries on with chrF++ and BLEU if COMET will
+# not load.
+#
+# Install it when you want the learned metric for final test-set numbers,
+# ideally in a separate virtualenv:
+#
+#   pip install -r requirements-comet.txt
+#
+# If it refuses to resolve on Python 3.13, that is expected -- use 3.12 for this
+# one, or skip it and report chrF++ instead.
+
+unbabel-comet>=2.2

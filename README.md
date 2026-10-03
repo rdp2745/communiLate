@@ -31,13 +31,36 @@ pip install -r requirements.txt
 pip install -e .
 ```
 
-The config, schema and data layers import nothing from torch, so you can develop
-and test the data pipeline before installing the ML stack:
+Once the venv is active, `python` resolves to the venv's interpreter, so a
+version manager (asdf, pyenv) stops intercepting it.
+
+**If you use asdf** and see `No version is set for command python`: the repo
+ships a `.tool-versions` pinning `python 3.13.0`. If asdf has a different version
+installed, edit that file to match (`asdf list python` shows what you have), or
+run `asdf install python 3.13.0`.
+
+The config, schema and data layers import nothing from torch, so the whole data
+pipeline can be developed and tested before the ML stack is installed:
 
 ```bash
 pip install PyYAML pytest
-pytest          # 71 tests, no torch required
+pytest          # 126 tests, no torch and no network required
 ```
+
+### COMET is deliberately optional
+
+`requirements.txt` leaves COMET out. It pulls in pytorch-lightning and pins
+transitive versions tightly, making it the most likely dependency to fail an
+install or drag the rest of the stack backwards. Nothing in the pipeline needs
+it — `eval.metrics` reports a per-metric error and carries on with chrF++ and
+BLEU if COMET will not load.
+
+```bash
+pip install -r requirements-comet.txt    # when you want the learned metric
+```
+
+If it refuses to resolve on Python 3.13, that is expected. Use 3.12 for that one
+metric, or report chrF++ instead.
 
 ---
 

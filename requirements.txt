@@ -1,21 +1,25 @@
-# --- core (needed for config / schema / data layer) ---
+# Core + ML stack. Everything here has wheels on CPython 3.11-3.13.
+#
+# Install order note: torch first if you want a specific CUDA/CPU build --
+# see https://pytorch.org/get-started/locally/ for the right index URL.
+
+# --- core (config / schema / data layer only; no ML needed) ---
 PyYAML>=6.0
 
-# --- ML stack (needed only for training + inference) ---
-torch>=2.1
+# --- ML stack (training + inference) ---
+torch>=2.6            # 2.6 is the first release with CPython 3.13 wheels
 transformers>=4.44
 peft>=0.11
 accelerate>=0.30
 datasets>=2.19
-sentencepiece>=0.2
+sentencepiece>=0.2.1  # 0.2.1 added 3.13 wheels; earlier versions build from source
 
 # --- evaluation ---
-sacrebleu>=2.4
-unbabel-comet>=2.2
+sacrebleu>=2.4        # chrF++, BLEU, TER
 
 # --- retrieval ---
 sentence-transformers>=3.0
-faiss-cpu>=1.8
+faiss-cpu>=1.9        # 1.9 added 3.13 wheels
 
 # --- dev ---
 pytest>=8.0
